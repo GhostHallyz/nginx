@@ -1,0 +1,223 @@
+#!/bin/sh
+#
+# nginx        Startup script for nginx
+#
+# chkconfig: - 85 15
+# processname: nginx
+# config: /usr/local/nginx/conf/nginx.conf
+# config: /etc/sysconfig/nginx
+# pidfile: /usr/local/nginx/var/nginx.pid
+# description: nginx is a HTTP and reverse proxy server
+#
+### BEGIN INIT INFO
+# Provides: nginx
+# Required-Start: $local_fs $remote_fs $network
+# Required-Stop: $local_fs $remote_fs $network
+# Default-Start: 2 3 4 5
+# Default-Stop: 0 1 6
+# Short-Description: start and stop nginx
+### END INIT INFO
+
+# Source function library.
+SYSTEMCTL_SKIP_REDIRECT=1
+. /etc/rc.d/init.d/functions
+
+if [ -f /etc/sysconfig/nginx ]; then
+    . /etc/sysconfig/nginx
+fi
+
+prog=nginx
+nginx=${nginx-/usr/local/nginx/sbin/nginx}
+conffile=${CONFFILE-/usr/local/nginx/conf/nginx.conf}
+lockfile=${LOCKFILE-/usr/local/nginx/var/nginx.lock}
+pidfile=${PIDFILE-/usr/local/nginx/var/nginx.pid}
+SLEEPMSEC=6000000
+RETVAL=0
+
+ulimit -HSn 65536
+
+start() {
+    echo -n $"Starting $prog: "
+
+    daemon --pidfile=${pidfile} ${nginx} -c ${conffile}
+    RETVAL=$?
+    echo
+    [ $RETVAL = 0 ] && touch ${lockfile}
+    return $RETVAL
+}
+
+stop() {
+    echo -n $"Stopping $prog: "
+    killproc -p ${pidfile} ${prog}
+    RETVAL=$?
+    echo
+    [ $RETVAL = 0 ] && rm -f ${lockfile} ${pidfile}
+}
+
+get_worker_pids() {
+    local pids=$(ps -ef | \
+          egrep -w $(ps -ef | grep -w "master process $nginx" | grep -v grep | awk '{print $2}' | xargs | sed -e 's/ /\|/g') | \
+          grep -v grep | \
+          grep -w 'nginx: worker process' | \
+          grep -v 'shutting down' | \
+          awk '{print $2}' | \
+          sort -rn | \
+          xargs | \
+          sed -e 's/ /,/g')
+    echo -n $pids
+}
+
+get_master_pids() {
+    local pids=$(ps -ef | \
+          grep -w "master process $nginx" | \
+          grep -v grep | \
+          awk '{print $2}' | \
+          sort -rn | \
+          xargs | \
+          sed -e 's/ /,/g')
+    echo -n $pids
+}
+
+reload() {
+ 
+
+    pid1=`get_worker_pids | md5sum | awk '{print $1}'`
+    res=`killproc -p ${pidfile} ${prog} -HUP`
+
+    for((i=0;i<=180;i++))
+    do
+        pid2=`get_worker_pids | md5sum | awk '{print $1}'`
+        if [[ ${pid1} == ${pid2} ]];then
+            /bin/usleep 2000000
+        else
+            echo -n $"Reloading $prog: "
+            echo $res
+            RETVAL=0
+            return 0
+        fi
+    done
+
+    echo "Reload failed: worker pids are equal"
+    echo
+    RETVAL=1
+    return 1
+}
+
+
+safereload() {
+    worker_num=`for m_pid in $(get_master_pids | tr ',' ' '); do ps -ef | awk '{if($3=='$m_pid') print $0}'; done | \
+                grep -cw 'nginx: worker process'`
+    if [[ $worker_num -ge 16 ]];then
+        echo "Reload failed: nginx worker process nums more then 16"
+        return 1
+    fi
+
+    configtest -q || return 6
+    reload
+}
+
+
+upgrade() {
+    oldbinpidfile=${pidfile}.oldbin
+
+    configtest -q || return 6
+
+    pid1=`get_master_pids | md5sum | awk '{print $1}'`
+
+    res_usr2=`killproc -p ${pidfile} ${prog} -USR2`
+
+    for (( i=0; i<=180; i++ ))
+    do
+        /bin/usleep $SLEEPMSEC
+
+        if [ -f ${oldbinpidfile} -a -f ${pidfile} ]; then
+            echo -n $"Staring new master $prog: "
+            echo $res_usr2
+
+            res_quit=`killproc -p ${oldbinpidfile} ${prog} -QUIT`
+
+            pid2=`get_master_pids | md5sum | awk '{print $1}'`
+
+            if [ ${pid1} = ${pid2} ];then
+                echo "Upgrade failed: master pids are equal"
+                RETVAL=1
+                return 1
+            fi
+
+            echo -n $"Graceful shutdown of old $prog: "
+            echo $res_quit
+            RETVAL=0
+            return 0
+        else
+            continue
+        fi
+    done
+    echo $"Upgrade failed: not found ${pidfile}.oldbin"
+
+    RETVAL=1
+    return 1
+}
+
+
+configtest() {
+    if [ "$#" -ne 0 ] ; then
+        case "$1" in
+            -q)
+                FLAG=$1
+                ;;
+            *)
+                ;;
+        esac
+        shift
+    fi
+    ${nginx} -t -c ${conffile} $FLAG
+    RETVAL=$?
+    return $RETVAL
+}
+
+rh_status() {
+    status -p ${pidfile} ${nginx}
+}
+
+# See how we were called.
+case "$1" in
+    start)
+        rh_status >/dev/null 2>&1 && exit 0
+        start
+        ;;
+    stop)
+        stop
+        ;;
+    status)
+        rh_status
+        RETVAL=$?
+        ;;
+    restart)
+        configtest -q || exit $RETVAL
+        stop
+        start
+        ;;
+    upgrade)
+        upgrade
+        ;;
+    condrestart|try-restart)
+        if rh_status >/dev/null 2>&1; then
+            stop
+            start
+        fi
+        ;;
+    force-reload|reload)
+        reload
+        ;;
+    safe-reload)
+        safereload
+        ;;
+    configtest)
+        configtest
+        ;;
+    *)
+        echo $"Usage: $prog {start|stop|restart|condrestart|try-restart|force-reload|upgrade|reload|safe-reload|status|help|configtest}"
+        RETVAL=2
+esac
+
+exit $RETVAL

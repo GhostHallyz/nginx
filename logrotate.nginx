@@ -1,0 +1,13 @@
+/usr/local/nginx/logs/*.log {
+        #daily
+        size 500M
+        missingok
+        rotate 40
+        #compress
+        delaycompress
+        notifempty
+        sharedscripts
+        postrotate
+                [ -f /usr/local/nginx/var/nginx.pid ] && kill -USR1 `cat /usr/local/nginx/var/nginx.pid`
+        endscript
+}

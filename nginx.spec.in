@@ -1,0 +1,176 @@
+%define software nginx
+%define nginx_user nobody
+%define nginx_group nobody
+%define nginx_home /usr/local/nginx
+%define nginx_home_tmp  /usr/local/nginx/tmp
+%define nginx_home_state  /usr/local/nginx/state
+%define nginx_release @release@
+
+Name: %{software}
+Version: @version@
+Release: @release@%{?dist}
+Vendor: GhostHallyz
+Packager: NGC
+URL: https://github.com/GhostHallyz/nginx
+Summary: A distribution of nginx with so much advanced features
+License: 2-clause BSD-like license
+Group: System Environment/Daemons
+
+Source0: nginx-%{version}.tar.gz
+
+BuildRoot: %{_tmppath}/%{software}-%{version}-%{release}-root
+BuildRequires: zlib-devel
+BuildRequires: GeoIP-devel
+BuildRequires: perl
+Requires: initscripts >= 8.36
+Requires(pre): shadow-utils
+Requires(post): chkconfig
+Requires: GeoIP
+Provides: webserver
+
+%description
+nginx is a web server originated by GhostHallyz, the great cloud service company in Asia.
+
+%prep
+%setup -q -n %{software}-%{version}
+
+%build
+pushd libs/luajit2
+make CCDEBUG=-g XCFLAGS=-msse4.2 %{?_smp_mflags}
+make PREFIX=$RPM_BUILD_DIR/luajit install
+rm -f $RPM_BUILD_DIR/luajit/lib/libluajit-5.1.so
+rm -f $RPM_BUILD_DIR/luajit/lib/libluajit-5.1.so.2
+rm -f $RPM_BUILD_DIR/luajit/lib/libluajit-5.1.so.2.1.0
+popd
+
+export LUAJIT_INC=$RPM_BUILD_DIR/luajit/include/luajit-2.1
+export LUAJIT_LIB=$RPM_BUILD_DIR/luajit/lib
+./auto/configure \
+    --prefix=%{nginx_home} \
+    --conf-path=%{nginx_home}/conf/nginx.conf \
+    --sbin-path=%{nginx_home}/sbin/nginx \
+    --error-log-path=%{nginx_home}/logs/error.log \
+    --http-log-path=%{nginx_home}/logs/access.log \
+    --pid-path=%{nginx_home}/var/nginx.pid \
+    --lock-path=%{nginx_home}/var/nginx.lock \
+    --user=%{nginx_user} \
+    --group=%{nginx_group} \
+    --http-client-body-temp-path=%{nginx_home_tmp}/client_body \
+    --http-proxy-temp-path=%{nginx_home_tmp}/proxy \
+    --http-fastcgi-temp-path=%{nginx_home_tmp}/fastcgi \
+    --http-uwsgi-temp-path=%{nginx_home_tmp}/uwsgi \
+    --http-scgi-temp-path=%{nginx_home_tmp}/scgi \
+    --with-file-aio \
+    --with-debug \
+    --with-threads \
+    --with-http_ssl_module \
+    --with-http_v2_module \
+    --with-http_realip_module \
+    --with-http_addition_module \
+    --with-http_sub_module \
+    --with-http_dav_module \
+    --with-http_flv_module \
+    --with-http_mp4_module \
+    --with-http_gunzip_module \
+    --with-http_gzip_static_module \
+    --with-http_auth_request_module \
+    --with-http_random_index_module \
+    --with-http_secure_link_module \
+    --with-http_degradation_module \
+    --with-http_slice_module \
+    --with-http_stub_status_module \
+    --with-http_geoip_module \
+    --add-module=addons/lua-nginx-module \
+    --with-stream \
+    --with-jemalloc=libs/jemalloc-5.2.1 \
+    --with-pcre=libs/pcre-8.44 \
+    --with-pcre-jit \
+    --with-openssl=libs/bsc-openssl \
+    --with-openssl-opt="-g enable-weak-ssl-ciphers enable-ssl3 enable-ssl3-method -DBSC_EXTEND" \
+    --with-cc-opt="%{optflags} $(pcre-config --cflags) -DNGX_BSC_ENC_PRIV -DNGX_BSC_EXTEND -DNGX_BSC_OCSP -DNGX_BSC_STUB -DNGX_BSC_SSL_EXT_VAR -DOPENSSL_VER_1_1 -DNGX_BSC_CTLS -DTCP_FASTOPEN=23 -DNGX_BSC_RELEASE=%{nginx_release}" \
+        $*
+make %{?_smp_mflags}
+
+
+%install
+# remove default stripping
+%define __spec_install_port /usr/lib/rpm/brp-compress
+
+%{__rm} -rf $RPM_BUILD_ROOT
+%{__make} DESTDIR=$RPM_BUILD_ROOT install
+
+%{__mkdir} -p $RPM_BUILD_ROOT%{nginx_home}/var
+%{__mkdir} -p $RPM_BUILD_ROOT%{nginx_home}/logs
+%{__mkdir} -p $RPM_BUILD_ROOT%{nginx_home_tmp}
+%{__mkdir} -p $RPM_BUILD_ROOT%{nginx_home_state}
+%{__mkdir} -p $RPM_BUILD_ROOT%{_initrddir}
+%{__mkdir} -p $RPM_BUILD_ROOT%{_sysconfdir}/logrotate.d
+%{__mkdir} -p $RPM_BUILD_ROOT%{nginx_home}/modules
+
+install -m 755 nginx.init $RPM_BUILD_ROOT%{_initrddir}/nginx
+install -m 644 logrotate.nginx $RPM_BUILD_ROOT%{_sysconfdir}/logrotate.d/nginx
+
+%{__rm} -rf $RPM_BUILD_ROOT%{nginx_home}/include
+%{__rm} -f $RPM_BUILD_ROOT%{nginx_home}/conf/*.default
+%{__rm} -f $RPM_BUILD_ROOT%{nginx_home}/conf/fastcgi.conf
+%{__rm} -f $RPM_BUILD_ROOT%{nginx_home}/conf/scgi_params
+%{__rm} -f $RPM_BUILD_ROOT%{nginx_home}/conf/uwsgi_params
+%{__rm} -f $RPM_BUILD_ROOT%{nginx_home}/html/index.html
+
+# install SYSV init stuff
+%{__mkdir} -p $RPM_BUILD_ROOT%{_initrddir}
+
+%clean
+#%{__rm} -rf $RPM_BUILD_ROOT
+
+%files
+%defattr(-,root,root)
+%{nginx_home}/sbin/nginx
+
+%dir %{nginx_home}/conf
+%attr(0755,root,root) %dir %{nginx_home}/var
+%attr(0755,root,root) %dir %{nginx_home}/logs
+%attr(-,%{nginx_user},%{nginx_group}) %dir %{nginx_home_tmp}
+%attr(-,%{nginx_user},%{nginx_group}) %dir %{nginx_home_state}
+
+%config(noreplace) %{nginx_home}/conf/nginx.conf
+%config(noreplace) %{nginx_home}/conf/mime.types
+%config(noreplace) %{nginx_home}/conf/fastcgi_params
+%config(noreplace) %{nginx_home}/conf/koi-utf
+%config(noreplace) %{nginx_home}/conf/koi-win
+%config(noreplace) %{nginx_home}/conf/win-utf
+
+%{nginx_home}/modules
+%{nginx_home}/html
+
+%{_initrddir}/nginx
+%config(noreplace) %{_sysconfdir}/logrotate.d/nginx
+
+%pre
+# Add the "web" user
+getent group %{nginx_group} >/dev/null || groupadd -r %{nginx_group}
+getent passwd %{nginx_user} >/dev/null || \
+    useradd -r -g %{nginx_group} -s /sbin/nologin \
+    -d %{nginx_home} -c "web user"  %{nginx_user}
+exit 0
+
+%post
+# Register the nginx service
+if [ $1 -eq 1 ]; then
+   /sbin/chkconfig --add nginx
+fi
+
+%preun
+if [ $1 -eq 0 ]; then
+   /sbin/service nginx stop > /dev/null 2>&1
+   /sbin/chkconfig --del nginx
+fi
+
+%postun
+if [ $1 -ge 1 ]; then
+    /sbin/service nginx upgrade &>/dev/null || :
+fi
+
+%changelog
+
+- Initial release
